@@ -42,10 +42,12 @@ def createTables():
                      "CREATE TABLE Owns( "
                      "apartment_id INTEGER PRIMARY KEY NOT NULL CHECK(apartment_id > 0),"
                      "owner_id INTEGER NOT NULL CHECK(owner_id > 0),"
-                     #"PRIMARY KEY (apartment_id, owner_id),"
-                     "FOREIGN KEY (owner_id) REFERENCES Owners(owner_id),"
+                     "FOREIGN KEY (owner_id) REFERENCES Owners(owner_id) ON DELETE CASCADE,"
                      "FOREIGN KEY (apartment_id) REFERENCES Apartments(apartment_id));"
 
+
+                     # "FOREIGN KEY (owner_id) REFERENCES Owners(owner_id)"
+                     # "ON DELETE CASCADE)"
                      "COMMIT;")
 
         conn.commit()
@@ -330,7 +332,6 @@ def customer_updated_review(customer_id: int, apartmetn_id: int, update_date: da
 
 
 def owner_owns_apartment(owner_id: int, apartment_id: int) -> ReturnValue:
-    # DOESNT WORK YET --------------------------------------
     conn = None
     try:
         conn = Connector.DBConnector()
@@ -339,18 +340,7 @@ def owner_owns_apartment(owner_id: int, apartment_id: int) -> ReturnValue:
                             "SELECT {apartment_id},{owner_id} "
                             "WHERE EXISTS (SELECT 1 FROM owners WHERE owner_id = {owner_id});").format(
                         apartment_id=sql.Literal(apartment_id),
-                        owner_id=sql.Literal(owner_id), owner_id1=sql.Literal(owner_id))
-
-
-        # query_str = sql.SQL(
-        #     "INSERT INTO Owns (apartment_id, owner_id) "
-        #     "SELECT {apartment_id}, {owner_id} "
-        #     "WHERE NOT EXISTS (SELECT apartment_id FROM Owns WHERE apartment_id = {apartment_id})").format(
-        #     apartment_id=sql.Literal(apartment_id),a
-        #     owner_id=sql.Literal(owner_id))
-
-
-
+                        owner_id=sql.Literal(owner_id))
 
         rows_effected, result = conn.execute(query_str)
         conn.commit()
@@ -376,18 +366,74 @@ def owner_owns_apartment(owner_id: int, apartment_id: int) -> ReturnValue:
 
 
 def owner_drops_apartment(owner_id: int, apartment_id: int) -> ReturnValue:
-    # TODO: implement
-    pass
+    conn = None
+    try:
+        conn = Connector.DBConnector()
+        query = sql.SQL("DELETE FROM Owns "
+                        "WHERE Owns.owner_id = {owner_id} AND Owns.apartment_id = {apartment_id} ").format(owner_id=sql.Literal(owner_id),apartment_id=sql.Literal(apartment_id))
+        rows_effected, result = conn.execute(query)
+        conn.commit()
 
+    except DatabaseException.NOT_NULL_VIOLATION as e:
+        return ReturnValue.BAD_PARAMS
+    except DatabaseException.CHECK_VIOLATION as e:
+        return ReturnValue.BAD_PARAMS
+    except DatabaseException.FOREIGN_KEY_VIOLATION as e:
+        return ReturnValue.NOT_EXISTS
+    except Exception as e:
+        return ReturnValue.ERROR
+
+    finally:
+        conn.close()
+
+    if rows_effected == 0:
+        return ReturnValue.NOT_EXISTS
+
+    return ReturnValue.OK
 
 def get_apartment_owner(apartment_id: int) -> Owner:
-    # TODO: implement
-    pass
+    conn = None
+    try:
+        conn = Connector.DBConnector()
+        rows_effected, result = conn.execute(
+            "SELECT Owns.owner_id,Owners.owner_name FROM Owns,Owners "
+            "WHERE Owns.apartment_id = {apartment_id} AND Owners.owner_id = Owns.owner_id;".format(apartment_id=apartment_id))
+        conn.commit()
+
+    except Exception as e:
+        return Owner.bad_owner()
+
+    finally:
+        conn.close()
+        if result.rows:
+            return Owner(result.rows[0][0], result.rows[0][1])
+        return Owner.bad_owner()
 
 
 def get_owner_apartments(owner_id: int) -> List[Apartment]:
-    # TODO: implement
-    pass
+    conn = None
+    apartments = []
+    try:
+        conn = Connector.DBConnector()
+        rows_effected, result = conn.execute(
+            "SELECT Apartments.* FROM Apartments, Owns "
+            "WHERE Owns.owner_id = {owner_id} AND Apartments.apartment_id = Owns.apartment_id;".format(owner_id=owner_id))
+        conn.commit()
+
+    except Exception as e:
+        return apartments
+
+    finally:
+        conn.close()
+
+    # build the list of apartments.
+    for index in range(rows_effected):
+        apartments.append(Apartment(result.rows[index][0], result.rows[index][1], result.rows[index][2], result.rows[index][3],
+                             result.rows[index][4]))
+    return apartments
+
+
+
 
 
 # ---------------------------------- BASIC API: ----------------------------------
