@@ -336,16 +336,11 @@ def owner_owns_apartment(owner_id: int, apartment_id: int) -> ReturnValue:
         conn = Connector.DBConnector()
 
         query_str = sql.SQL("INSERT INTO Owns(apartment_id,owner_id) "
-                            "VALUES ({apartment_id},{owner_id}) "
-                            "WHERE {owner_id1} IN (SELECT owner_id FROM Owners); ").format(
+                            "SELECT {apartment_id},{owner_id} "
+                            "WHERE EXISTS (SELECT 1 FROM owners WHERE owner_id = {owner_id});").format(
                         apartment_id=sql.Literal(apartment_id),
                         owner_id=sql.Literal(owner_id), owner_id1=sql.Literal(owner_id))
 
-        query_str = sql.SQL("INSERT INTO Owns(apartment_id,owner_id) "
-                                    "VALUES ({apartment_id},{owner_id}) "
-                                    "FROM Owners WHERE EXISTS (SELECT 1 FROM Owners WHERE owner_id = {owner_id}); ").format(
-                                apartment_id=sql.Literal(apartment_id),
-                                owner_id=sql.Literal(owner_id))
 
         # query_str = sql.SQL(
         #     "INSERT INTO Owns (apartment_id, owner_id) "
@@ -363,8 +358,8 @@ def owner_owns_apartment(owner_id: int, apartment_id: int) -> ReturnValue:
         return ReturnValue.BAD_PARAMS
     except DatabaseException.CHECK_VIOLATION as e:
         return ReturnValue.BAD_PARAMS
-    # except DatabaseException.UNIQUE_VIOLATION as e:
-    #     return ReturnValue.ALREADY_EXISTS
+    except DatabaseException.UNIQUE_VIOLATION as e:
+        return ReturnValue.ALREADY_EXISTS
     except DatabaseException.FOREIGN_KEY_VIOLATION as e:
         return ReturnValue.NOT_EXISTS
     except DatabaseException.ConnectionInvalid as e:
@@ -374,6 +369,8 @@ def owner_owns_apartment(owner_id: int, apartment_id: int) -> ReturnValue:
     finally:
         conn.close()
 
+    if rows_effected == 0:
+        return ReturnValue.NOT_EXISTS
 
     return ReturnValue.OK
 
