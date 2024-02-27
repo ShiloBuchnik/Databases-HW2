@@ -342,10 +342,10 @@ def customer_made_reservation(customer_id: int, apartment_id: int, start_date: d
 		# Basically, 'WHERE NOT EXISTS' is true when there's no overlapping, and in that case, 'select' will just create a row on the fly
 		# 'WHERE NOT EXISTS' is false when there is overlapping, and in that case the entire subquery will return an empty relation
 		rows_effected, _ = conn.execute("INSERT INTO Reserves "
-						"SELECT {customer_id},{apartment_id},{start_date},{end_date},{total_price}"
+						"SELECT {customer_id},{apartment_id},'{start_date}','{end_date}',{total_price} "
 						"WHERE NOT EXISTS("
-						"SELECT 1 FROM Reserves r WHERE r.apartment_id = {apartment_id} AND (r.start_date, r.end_date) OVERLAPS ({start_date}, {end_date}) )"
-							.format(customer_id=customer_id, apartment_id=apartment_id, start_date=start_date, end_date=end_date, total_price=total_price))
+						"SELECT 1 FROM Reserves r WHERE r.apartment_id = {apartment_id} AND (r.start_date, r.end_date) OVERLAPS ('{start_date}', '{end_date}') )"
+							.format(customer_id=customer_id,apartment_id=apartment_id,start_date=start_date.strftime('%Y-%m-%d'),end_date=end_date.strftime('%Y-%m-%d'),total_price=total_price))
 		conn.commit()
 
 	except DatabaseException.NOT_NULL_VIOLATION as e:
@@ -375,9 +375,9 @@ def customer_cancelled_reservation(customer_id: int, apartment_id: int, start_da
 	conn = None
 	try:
 		conn = Connector.DBConnector()
-		rows_effected, _ = (conn.execute("DELETE FROM Reserves "
-						"WHERE Reserves.cust_id = {customer_id} AND Reserves.apartment_id = {apartment_id} AND Reserves.start_date = {start_date}")
-								 .format(customer_id=customer_id,apartment_id=apartment_id,start_date=start_date.strftime('%Y-%m-%d')))
+		rows_effected, _ = conn.execute("DELETE FROM Reserves "
+						"WHERE Reserves.cust_id = {customer_id} AND Reserves.apartment_id = {apartment_id} AND Reserves.start_date = '{start_date}'"
+										.format(customer_id=customer_id,apartment_id=apartment_id,start_date=start_date.strftime('%Y-%m-%d')))
 		conn.commit()
 
 	except DatabaseException.NOT_NULL_VIOLATION as e:
@@ -409,11 +409,11 @@ def customer_reviewed_apartment(customer_id: int, apartment_id: int, review_date
 		# Same shtick as with 'customer_made_reservation()'
 		# 'WHERE EXISTS' is true when there's a reservation that ended before 'review_date', and in that case, 'select' will just create a row on the fly
 		# 'WHERE EXISTS' is false otherwise, and in that case the entire subquery will return an empty relation
-		(conn.execute("INSERT INTO Reviews "
-						"SELECT {customer_id},{apartment_id},{review_date},{rating},{review_text}"
+		conn.execute("INSERT INTO Reviews "
+						"SELECT {customer_id},{apartment_id},'{review_date}',{rating},'{review_text}' "
 					  	"WHERE EXISTS("
-					  	"SELECT 1 FROM Reserves r WHERE r.cust_id = {customer_id} AND r.apartment_id = {apartment_id} AND r.end_date < {review_date}")
-								 .format(customer_id=customer_id,apartment_id=apartment_id,review_date=review_date.strftime('%Y-%m-%d'),rating=rating,review_text=review_text))
+					  	"SELECT 1 FROM Reserves r WHERE r.cust_id = {customer_id} AND r.apartment_id = {apartment_id} AND r.end_date < '{review_date}')"
+					 .format(customer_id=customer_id,apartment_id=apartment_id,review_date=review_date.strftime('%Y-%m-%d'),rating=rating,review_text=review_text))
 		conn.commit()
 
 	except DatabaseException.NOT_NULL_VIOLATION as e:
@@ -440,10 +440,10 @@ def customer_updated_review(customer_id: int, apartment_id: int, update_date: da
 	conn = None
 	try:
 		conn = Connector.DBConnector()
-		rows_effected, _ = (conn.execute("UPDATE Reviews "
-						"SET rating={new_rating}, review_text={new_text}"
-						"WHERE cust_id={customer_id} AND apartment_id={apartment_id} AND review_date < {update_date}")
-								 .format(new_rating=new_rating,new_text=new_text,customer_id=customer_id,apartment_id=apartment_id,update_date=update_date.strftime('%Y-%m-%d')))
+		rows_effected, _ = conn.execute("UPDATE Reviews "
+						"SET rating={new_rating}, review_text='{new_text}' "
+						"WHERE cust_id={customer_id} AND apartment_id={apartment_id} AND review_date < '{update_date}'"
+										.format(new_rating=new_rating,new_text=new_text,customer_id=customer_id,apartment_id=apartment_id,update_date=update_date.strftime('%Y-%m-%d')))
 		conn.commit()
 
 	except DatabaseException.NOT_NULL_VIOLATION as e:
@@ -539,7 +539,7 @@ def get_apartment_owner(apartment_id: int) -> Owner:
     finally:
         conn.close()
         if result.rows: # TODO: why is this in the 'finally'? Isn't that going to execute regardless of an exception?
-            return Owner(result.rows[0][0], result.rows[0][1]) # TODO: wait, why are you addressing result using 'rows'?
+            return Owner(result.rows[0][0], result.rows[0][1])
         return Owner.bad_owner()
 
 
@@ -566,17 +566,74 @@ def get_owner_apartments(owner_id: int) -> List[Apartment]:
     return apartments
 
 
-
 # ---------------------------------- BASIC API: ----------------------------------
 
 def get_apartment_rating(apartment_id: int) -> float:
-    # TODO: implement
-    pass
+	conn = None
+	try:
+		conn = Connector.DBConnector()
+
+		# In each function call, we drop the view from last function call (if exists), and create a new one to use
+		_, result = conn.execute("BEGIN;"
+								 "DROP VIEW IF EXISTS ApartmentRating CASCADE; "
+
+								"CREATE VIEW ApartmentRating AS " # Returns column of ratings of 'apartment_id' 
+                        		"SELECT rating "
+                        		"FROM Reviews "
+                        		"WHERE apartment_id = {apartment_id}; "
+
+								"SELECT AVG(rating) AS average_rating "
+								"FROM ApartmentRating "
+
+								 "COMMIT;".format(apartment_id=apartment_id))
+
+		conn.commit()
+		return result[0]['average_rating']
+
+	except Exception as e:
+		return ReturnValue.ERROR
+
+	finally:
+		conn.close()
 
 
 def get_owner_rating(owner_id: int) -> float:
-    # TODO: implement
-    pass
+	conn = None
+	try:
+		conn = Connector.DBConnector()
+
+		_, result = conn.execute("BEGIN;"
+								 "DROP VIEW IF EXISTS ApartmentRating CASCADE; "
+
+								 "CREATE VIEW ReducedOwns AS " # Reducing 'Owns' to contain only apartments owned by 'owner_id'
+								 "SELECT * "
+								 "FROM OWNS "
+								 "WHERE owner_id = {owner_id}; "
+
+								# Joining 'Reviews' with 'ReducedOwns', so we get ratings only for apartments owned by 'owner_id'
+								# Then we calculate average rating for each apartment by grouping them by 'apartment_id'
+								# The output is a table with two columns - 'apartment_id' and its average rating
+								 "CREATE VIEW ApartmentsAverages AS "
+								 "SELECT r.apartment_id, AVG(rating) AS average_rating "
+								 "FROM Reviews r, ReducedOwns ro "
+								 "WHERE r.apartment_id = ro.apartment_id "
+								 "GROUP BY r.apartment_id; "
+
+								 "SELECT AVG(average_rating) AS average_rating " # Calculating average of averages
+								 "FROM ApartmentsAverages "
+
+								 "COMMIT;".format(owner_id=owner_id))
+
+		conn.commit()
+		# If 'result' is empty, that means there isn't an owner with 'owner_id';
+		# or the owner doesn't own any apartments; or their apartment(s) didn't get reviews.
+		return result[0]['average_rating'] if result[0]['average_rating'] else 0.0
+
+	except Exception as e:
+		return ReturnValue.ERROR
+
+	finally:
+		conn.close()
 
 
 def get_top_customer() -> Customer:
@@ -586,11 +643,17 @@ def get_top_customer() -> Customer:
 		# We group 'Reserves' by 'cust_id', and then sort it:
 		# First by group's count in descending order (so bigger is first), and if there's a tie - then by 'cust_id' in ascending order (so smaller is first)
 		# Then we limit only to the first tuple (we only want the top customer)
-		_, result = conn.execute("SELECT cust_id"
-									"FROM Reserves"
-									"GROUP BY cust_id"
-									"ORDER BY COUNT(*) DESC, cust_id"
-									"LIMIT 1")
+
+		# Minor tidbit: 'Reserves' only gives us 'cust_id', but we need 'cust_name' as well;
+		# so we query in 'Customers' using the returned 'cust_id' from the subquery
+		_, result = conn.execute("SELECT cust_id, cust_name "
+								 "FROM Customers as c "
+								 "WHERE c.cust_id = "
+									"(SELECT cust_id "
+									"FROM Reserves "
+									"GROUP BY cust_id "
+									"ORDER BY COUNT(*) DESC, cust_id "
+									"LIMIT 1)")
 		conn.commit()
 
 		return Customer(result[0]['cust_id'], result[0]['cust_name'])
@@ -608,12 +671,12 @@ def reservations_per_owner() -> List[Tuple[str, int]]:
 		conn = Connector.DBConnector()
 		# We want num_of_reservations for *all* owners, not just ones with actual reservations.
 		# Because of that, we first use right outer join, and only then we group by 'owner_id'
-		_, result = conn.execute("SELECT owner_id, COUNT(*) AS num_of_reservations"
-									"FROM Reserves r RIGHT OUTER JOIN Owns o ON r.apartment.id = o.apartment"
+		_, result = conn.execute("SELECT owner_id, COUNT(*) AS num_of_reservations "
+									"FROM Reserves r RIGHT OUTER JOIN Owns o ON r.apartment_id = o.apartment_id "
 									"GROUP BY o.owner_id")
 		conn.commit()
 
-		return result
+		return result.rows
 
 	except Exception as e:
 		return ReturnValue.ERROR
@@ -647,3 +710,19 @@ dropTables()
 createTables()
 add_customer(Customer(123, "David"))
 add_customer(Customer(222, "Yossi"))
+add_owner(Owner(1, "Iddo"))
+add_owner(Owner(2, "Shlomi"))
+add_apartment(Apartment(1, "Rabin", "Tel Aviv", "Israel", "100"))
+add_apartment(Apartment(2, "Levinson", "Tel Aviv", "Israel", "100"))
+owner_owns_apartment(1, 1)
+owner_owns_apartment(1, 2)
+customer_made_reservation(123, 1, date(2023, 1,1), date(2023, 1,2), 100)
+customer_made_reservation(222, 2, date(2023, 1,1), date(2023, 1,2), 100)
+#customer_cancelled_reservation(123, 1, date(2023,1, 1))
+customer_reviewed_apartment(123, 1, date(2023,1,3), 9, "very nice")
+customer_updated_review(123, 1, date(2023, 1,4), 10, "very very nice")
+customer_reviewed_apartment(222, 2, date(2023,1,3), 2, "not nice")
+get_top_customer()
+reservations_per_owner()
+get_apartment_rating(1)
+print(get_owner_rating(2))
