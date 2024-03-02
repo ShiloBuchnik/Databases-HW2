@@ -701,26 +701,46 @@ def get_all_location_owners() -> List[Owner]:
     conn = None
     try:
         conn = Connector.DBConnector()
-        rows_effected, result = conn.execute(
-                                             "DROP VIEW IF EXISTS AllCities CASCADE; "
-                                             "DROP VIEW IF EXISTS CitiesPerOwner CASCADE;"
 
-                                             "CREATE VIEW AllCities AS "  # Returns column of ratings of 'apartment_id' 
-                                             "SELECT DISTINCT city "
+        rows_effected, result = conn.execute(
+                                             "DROP VIEW IF EXISTS AllCityCountryCombinations CASCADE; "
+                                             "DROP VIEW IF EXISTS CityCountryPerOwner CASCADE;"
+
+                                             "CREATE VIEW AllCityCountryCombinations AS "  # Returns column of ratings of 'apartment_id' 
+                                             "SELECT DISTINCT city, country "
                                              "FROM Apartments; "
 
-                                             "CREATE VIEW CitiesPerOwner AS "  # Returns column of ratings of 'apartment_id' 
-                                             "SELECT Owns.owner_id, city "
-                                             "FROM Apartments, Owns "
-                                             "WHERE Apartments.apartment_id = Owns.apartment_id;"
+                                             "CREATE VIEW CityCountryPerOwner AS "  # Returns column of ratings of 'apartment_id' 
+                                             "SELECT Owns.owner_id, Apartments.city, Apartments.country "
+                                             "FROM Apartments "
+                                             "JOIN Owns ON Apartments.apartment_id = Owns.apartment_id;"
 
                                              "SELECT DISTINCT owner_id "
-                                             "FROM CitiesPerOwner "
-                                             "WHERE city IN (SELECT city FROM AllCities) "
+                                             "FROM CityCountryPerOwner "
+                                             "WHERE (city, country) IN (SELECT city, country FROM AllCityCountryCombinations) "
                                              "GROUP BY owner_id "
-                                             "HAVING COUNT(DISTINCT city) = (SELECT COUNT(city) FROM AllCities); "
+                                             "HAVING COUNT(DISTINCT city || ', ' || country) = (SELECT COUNT(*) FROM AllCityCountryCombinations); ")
 
-                                             )
+                                             # )rows_effected, result = conn.execute(
+                                             # "DROP VIEW IF EXISTS AllCities CASCADE; "
+                                             # "DROP VIEW IF EXISTS CitiesPerOwner CASCADE;"
+                                             #
+                                             # "CREATE VIEW AllCities AS "  # Returns column of ratings of 'apartment_id'
+                                             # "SELECT DISTINCT city "
+                                             # "FROM Apartments; "
+                                             #
+                                             # "CREATE VIEW CitiesPerOwner AS "  # Returns column of ratings of 'apartment_id'
+                                             # "SELECT Owns.owner_id, city "
+                                             # "FROM Apartments, Owns "
+                                             # "WHERE Apartments.apartment_id = Owns.apartment_id;"
+                                             #
+                                             # "SELECT DISTINCT owner_id "
+                                             # "FROM CitiesPerOwner "
+                                             # "WHERE city IN (SELECT city FROM AllCities) "
+                                             # "GROUP BY owner_id "
+                                             # "HAVING COUNT(DISTINCT city) = (SELECT COUNT(city) FROM AllCities); "
+                                             #
+                                             # )
 
 
         conn.commit()
@@ -791,6 +811,7 @@ add_owner(Owner(1, "Iddo"))
 add_owner(Owner(2, "Shlomi"))
 add_apartment(Apartment(1, "Rabin", "Tel Aviv", "Israel", "100"))
 add_apartment(Apartment(2, "Levinson", "Tel Aviv", "Israel", "100"))
+add_apartment(Apartment(3, "Levinson", "Tel Aviv", "Canada", "100"))
 owner_owns_apartment(1, 1)
 owner_owns_apartment(1, 2)
 allOwners = get_all_location_owners()
