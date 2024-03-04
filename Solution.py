@@ -126,7 +126,7 @@ def add_owner(owner: Owner) -> ReturnValue:
         conn = Connector.DBConnector()
         query = sql.SQL("INSERT INTO Owners(owner_id, owner_name) "
                         "VALUES ({owner_id},{owner_name})").format(owner_id=owner_id, owner_name=owner_name)
-        rows, _ = conn.execute(query)  # TODO: why do you assign into 'rows' here?
+        rows, _ = conn.execute(query)
         conn.commit()
     except DatabaseException.NOT_NULL_VIOLATION as e:
         return ReturnValue.BAD_PARAMS
@@ -149,7 +149,7 @@ def get_owner(owner_id: int) -> Owner:
     conn = None
     try:
         conn = Connector.DBConnector()
-        rows_effected, result = conn.execute(  # TODO: why do you assign into 'rows_effected' here?
+        _, result = conn.execute(
             "SELECT * FROM Owners WHERE Owners.owner_id = {owner_id}".format(owner_id=owner_id))
         conn.commit()
 
@@ -158,9 +158,10 @@ def get_owner(owner_id: int) -> Owner:
 
     finally:
         conn.close()
-        if result.rows:  # TODO: why is this in the 'finally'? Isn't that going to execute regardless of an exception?
-            return Owner(result.rows[0][0], result.rows[0][1])
-        return Owner.bad_owner()
+
+    if result.rows:
+        return Owner(result.rows[0][0], result.rows[0][1])
+    return Owner.bad_owner()
 
 
 def delete_owner(owner_id: int) -> ReturnValue:
@@ -175,13 +176,14 @@ def delete_owner(owner_id: int) -> ReturnValue:
     except Exception as e:
         return ReturnValue.ERROR
 
-    # TODO: what about BAD_PARAMS?
 
     finally:
         conn.close()
 
     if rows_effected == 0:
-        return ReturnValue.NOT_EXISTS
+        if owner_id > 0:
+            return ReturnValue.NOT_EXISTS
+        return ReturnValue.BAD_PARAMS
 
     return ReturnValue.OK
 
@@ -201,7 +203,7 @@ def add_apartment(apartment: Apartment) -> ReturnValue:
             apartment_id=apartment_id,
             address=address, city=city,
             country=country, size=size)
-        rows, _ = conn.execute(query)  # TODO: why do you assign into 'rows' here?
+        _, _ = conn.execute(query)
         conn.commit()
     except DatabaseException.NOT_NULL_VIOLATION as e:
         return ReturnValue.BAD_PARAMS
@@ -233,10 +235,10 @@ def get_apartment(apartment_id: int) -> Apartment:
 
     finally:
         conn.close()
-        if result.rows:  # TODO: why is this in the 'finally'? Isn't that going to execute regardless of an exception?
-            return Apartment(result.rows[0][0], result.rows[0][1], result.rows[0][2], result.rows[0][3],
-                             result.rows[0][4])
-        return Apartment.bad_apartment()
+    if result.rows:
+        return Apartment(result.rows[0][0], result.rows[0][1], result.rows[0][2], result.rows[0][3],
+                         result.rows[0][4])
+    return Apartment.bad_apartment()
 
 
 def delete_apartment(apartment_id: int) -> ReturnValue:
@@ -251,13 +253,15 @@ def delete_apartment(apartment_id: int) -> ReturnValue:
     except Exception as e:
         return ReturnValue.ERROR
 
-    # TODO: what about BAD_PARAMS?
+
 
     finally:
         conn.close()
 
     if rows_effected == 0:
-        return ReturnValue.NOT_EXISTS
+        if apartment_id > 0:
+            return ReturnValue.NOT_EXISTS
+        return ReturnValue.BAD_PARAMS
 
     return ReturnValue.OK
 
@@ -303,9 +307,9 @@ def get_customer(customer_id: int) -> Customer:
 
     finally:
         conn.close()
-        if result.rows:  # TODO: why is this in the 'finally'? Isn't that going to execute regardless of an exception?
-            return Customer(result.rows[0][0], result.rows[0][1])
-        return Customer.bad_customer()
+    if result.rows:
+        return Customer(result.rows[0][0], result.rows[0][1])
+    return Customer.bad_customer()
 
 
 def delete_customer(customer_id: int) -> ReturnValue:
@@ -320,13 +324,14 @@ def delete_customer(customer_id: int) -> ReturnValue:
     except Exception as e:
         return ReturnValue.ERROR
 
-    # TODO: what about BAD_PARAMS?
 
     finally:
         conn.close()
 
     if rows_effected == 0:
-        return ReturnValue.NOT_EXISTS
+        if customer_id > 0:
+            return ReturnValue.NOT_EXISTS
+        return ReturnValue.BAD_PARAMS
 
     return ReturnValue.OK
 
@@ -546,9 +551,9 @@ def get_apartment_owner(apartment_id: int) -> Owner:
 
     finally:
         conn.close()
-        if result.rows:  # TODO: why is this in the 'finally'? Isn't that going to execute regardless of an exception?
-            return Owner(result.rows[0][0], result.rows[0][1])
-        return Owner.bad_owner()
+    if result.rows:
+        return Owner(result.rows[0][0], result.rows[0][1])
+    return Owner.bad_owner()
 
 
 def get_owner_apartments(owner_id: int) -> List[Apartment]:
@@ -706,11 +711,11 @@ def get_all_location_owners() -> List[Owner]:
                                              "DROP VIEW IF EXISTS AllCityCountryCombinations CASCADE; "
                                              "DROP VIEW IF EXISTS CityCountryPerOwner CASCADE;"
 
-                                             "CREATE VIEW AllCityCountryCombinations AS "  # Returns column of ratings of 'apartment_id' 
+                                             "CREATE VIEW AllCityCountryCombinations AS "  
                                              "SELECT DISTINCT city, country "
                                              "FROM Apartments; "
 
-                                             "CREATE VIEW CityCountryPerOwner AS "  # Returns column of ratings of 'apartment_id' 
+                                             "CREATE VIEW CityCountryPerOwner AS "  
                                              "SELECT Owns.owner_id, Apartments.city, Apartments.country "
                                              "FROM Apartments "
                                              "JOIN Owns ON Apartments.apartment_id = Owns.apartment_id;"
@@ -721,26 +726,6 @@ def get_all_location_owners() -> List[Owner]:
                                              "GROUP BY owner_id "
                                              "HAVING COUNT(DISTINCT city || ', ' || country) = (SELECT COUNT(*) FROM AllCityCountryCombinations); ")
 
-                                             # )rows_effected, result = conn.execute(
-                                             # "DROP VIEW IF EXISTS AllCities CASCADE; "
-                                             # "DROP VIEW IF EXISTS CitiesPerOwner CASCADE;"
-                                             #
-                                             # "CREATE VIEW AllCities AS "  # Returns column of ratings of 'apartment_id'
-                                             # "SELECT DISTINCT city "
-                                             # "FROM Apartments; "
-                                             #
-                                             # "CREATE VIEW CitiesPerOwner AS "  # Returns column of ratings of 'apartment_id'
-                                             # "SELECT Owns.owner_id, city "
-                                             # "FROM Apartments, Owns "
-                                             # "WHERE Apartments.apartment_id = Owns.apartment_id;"
-                                             #
-                                             # "SELECT DISTINCT owner_id "
-                                             # "FROM CitiesPerOwner "
-                                             # "WHERE city IN (SELECT city FROM AllCities) "
-                                             # "GROUP BY owner_id "
-                                             # "HAVING COUNT(DISTINCT city) = (SELECT COUNT(city) FROM AllCities); "
-                                             #
-                                             # )
 
 
         conn.commit()
@@ -796,10 +781,72 @@ def best_value_for_money() -> Apartment:
 
 
 def profit_per_month(year: int) -> List[Tuple[int, float]]:
-    # TODO: implement
-    pass
+    conn = None
+    try:
+        conn = Connector.DBConnector()
+
+        # In each function call, we drop the view from last function call (if exists), and create a new one to use
+        _, result = conn.execute("BEGIN;"
+                                 "DROP VIEW IF EXISTS NumbersView CASCADE;"
+                                 "DROP VIEW IF EXISTS ApartmentsInYear CASCADE; "
+                                 ""
+                                 "CREATE VIEW NumbersView AS "
+                                 "WITH RECURSIVE NumberSeries AS ( "
+                                 "SELECT 1 AS monthNumber "
+                                 "UNION ALL "
+                                 "SELECT monthNumber + 1 "
+                                 "FROM NumberSeries "
+                                 "WHERE monthNumber < 12 "
+                                 ") "
+                                 "SELECT monthNumber FROM NumberSeries; "
+        
+                                 "CREATE VIEW ApartmentsInYear AS "
+                                 "SELECT total_price, EXTRACT(MONTH FROM (end_date)) AS month "
+                                 "FROM Reserves "
+                                 "WHERE {year} = EXTRACT(YEAR FROM (end_date)); "
+
+                                 "SELECT monthNumber, CAST(0.15*(SUM(COALESCE(total_price,0))) AS FLOAT) "
+                                 "FROM ApartmentsInYear AIY "
+                                 "RIGHT OUTER JOIN NumbersView NV ON AIY.month = NV.monthNumber "
+                                 "GROUP BY monthNumber " 
+                                 "ORDER BY monthNumber; ".format(year=year))
 
 
+        conn.commit()
+        return result.rows
+
+    except Exception as e:
+        return ReturnValue.ERROR
+
+    finally:
+        conn.close()
+
+
+
+  # "CREATE VIEW MonthsView AS "
+  #                                 "SELECT 1 AS MonthNumber "
+  #                                 "UNION ALL "
+  #                                 "SELECT 2 "
+  #                                 "UNION ALL "
+  #                                 "SELECT 3 "
+  #                                 "UNION ALL "
+  #                                 "SELECT 4 "
+  #                                 "UNION ALL "
+  #                                 "SELECT 5 "
+  #                                 "UNION ALL "
+  #                                 "SELECT 6 "
+  #                                 "UNION ALL "
+  #                                 "SELECT 7 "
+  #                                 "UNION ALL "
+  #                                 "SELECT 8 "
+  #                                 "UNION ALL "
+  #                                 "SELECT 9 "
+  #                                 "UNION ALL "
+  #                                 "SELECT 10 "
+  #                                 "UNION ALL "
+  #                                 "SELECT 11 "
+  #                                 "UNION ALL "
+  #                                 "SELECT 12; "
 def get_apartment_recommendation(customer_id: int) -> List[Tuple[Apartment, float]]:
     # TODO: implement
     pass
@@ -807,6 +854,9 @@ def get_apartment_recommendation(customer_id: int) -> List[Tuple[Apartment, floa
 
 dropTables()
 createTables()
+# delete_owner(-1)
+res = profit_per_month(2023)
+
 add_owner(Owner(1, "Iddo"))
 add_owner(Owner(2, "Shlomi"))
 add_apartment(Apartment(1, "Rabin", "Tel Aviv", "Israel", "100"))
@@ -826,6 +876,8 @@ owner_owns_apartment(2, 2)
 apart = best_value_for_money()
 
 customer_made_reservation(123, 1, date(2023, 1, 1), date(2023, 1, 6), 1000)
+
+
 customer_made_reservation(222, 1, date(2023, 2, 1), date(2023, 2, 4), 900)
 customer_made_reservation(123, 2, date(2023, 1, 1), date(2023, 1, 6), 10)
 customer_made_reservation(222, 2, date(2023, 2, 1), date(2023, 2, 4), 90)
