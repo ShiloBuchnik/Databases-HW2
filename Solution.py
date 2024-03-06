@@ -1,4 +1,3 @@
-from typing import List, Tuple
 from psycopg2 import sql
 from datetime import date, datetime
 
@@ -13,7 +12,7 @@ from Business.Apartment import Apartment
 
 # ---------------------------------- CRUD API: ----------------------------------
 
-def createTables():
+def create_tables():
 	conn = None
 	try:
 		conn = Connector.DBConnector()
@@ -81,7 +80,7 @@ def createTables():
 		conn.close()
 
 
-def clearTables():
+def clear_tables():
 	conn = None
 	try:
 		conn = Connector.DBConnector()
@@ -95,7 +94,7 @@ def clearTables():
 		conn.close()
 
 
-def dropTables():
+def drop_tables():
 	conn = None
 	try:
 		conn = Connector.DBConnector()
@@ -419,7 +418,7 @@ def customer_reviewed_apartment(customer_id: int, apartment_id: int, review_date
 		conn.execute("INSERT INTO Reviews "
 					 "SELECT {customer_id},{apartment_id},'{review_date}',{rating},'{review_text}' "
 					 "WHERE EXISTS("
-					 "SELECT 1 FROM Reserves r WHERE r.cust_id = {customer_id} AND r.apartment_id = {apartment_id} AND r.end_date < '{review_date}')"
+					 "SELECT 1 FROM Reserves r WHERE r.cust_id = {customer_id} AND r.apartment_id = {apartment_id} AND r.end_date <= '{review_date}')"
 					 .format(customer_id=customer_id, apartment_id=apartment_id,
 							 review_date=review_date.strftime('%Y-%m-%d'), rating=rating, review_text=review_text))
 		conn.commit()
@@ -589,11 +588,11 @@ def get_apartment_rating(apartment_id: int) -> float:
 		conn = Connector.DBConnector()
 
 		# In each function call, we drop the view from last function call (if exists), and create a new one to use
-		_, result = conn.execute("BEGIN;"
+		rows_affected, result = conn.execute("BEGIN;"
 								 "DROP VIEW IF EXISTS ApartmentRating CASCADE; "
 
 								 "CREATE VIEW ApartmentRating AS "  # Returns column of ratings of 'apartment_id' 
-								 "SELECT rating "
+								 "SELECT COALESCE(rating, 0) as rating "
 								 "FROM Reviews "
 								 "WHERE apartment_id = {apartment_id}; "
 
@@ -603,7 +602,7 @@ def get_apartment_rating(apartment_id: int) -> float:
 								 "COMMIT;".format(apartment_id=apartment_id))
 
 		conn.commit()
-		return result[0]['average_rating']
+		return result[0]['average_rating'] if result[0]['average_rating'] is not None else 0
 
 	except Exception as e:
 		return ReturnValue.ERROR
@@ -686,10 +685,13 @@ def reservations_per_owner() -> List[Tuple[str, int]]:
 		conn = Connector.DBConnector()
 		# We want num_of_reservations for *all* owners, not just ones with actual reservations.
 		# Because of that, we first use right outer join, and only then we group by 'owner_id'
-		_, result = conn.execute("SELECT owner_id, COUNT(*) AS num_of_reservations "
-								 "FROM Reserves r RIGHT OUTER JOIN Owns o ON r.apartment_id = o.apartment_id "
-								 "GROUP BY o.owner_id")
+		_, result = conn.execute("SELECT o.owner_name, COALESCE(COUNT(r.apartment_id), 0) AS numberOfReservations "
+								 "FROM Owners o "
+								 "LEFT JOIN Owns ow ON o.owner_id = ow.owner_id "
+								 "LEFT JOIN Reserves r ON ow.apartment_id = r.apartment_id "
+								 "GROUP BY o.owner_name;")
 		conn.commit()
+
 
 		return result.rows
 
@@ -720,18 +722,19 @@ def get_all_location_owners() -> List[Owner]:
 			"FROM Apartments "
 			"JOIN Owns ON Apartments.apartment_id = Owns.apartment_id;"
 
-			"SELECT DISTINCT owner_id "
-			"FROM CityCountryPerOwner "
-			"WHERE (city, country) IN (SELECT city, country FROM AllCityCountryCombinations) "
-			"GROUP BY owner_id "
-			"HAVING COUNT(DISTINCT city || ', ' || country) = (SELECT COUNT(*) FROM AllCityCountryCombinations); ")
+			"SELECT ccpo.owner_id, o.owner_name "
+			"FROM CityCountryPerOwner ccpo "
+			"JOIN Owners o ON ccpo.owner_id = o.owner_id "
+			"WHERE (ccpo.city, ccpo.country) IN (SELECT city, country FROM AllCityCountryCombinations) "
+			"GROUP BY ccpo.owner_id, o.owner_name "
+			"HAVING COUNT(DISTINCT ccpo.city || ', ' || ccpo.country) = (SELECT COUNT(*) FROM AllCityCountryCombinations); ")
 
 		conn.commit()
 
 		# JUST convert the result from ResultSet to list
 		list_to_ret = []
 		for index in range(rows_effected):
-			list_to_ret.append(result.rows[index][0])
+			list_to_ret.append(Owner(result.rows[index][0],result.rows[index][1]))
 		return list_to_ret
 
 	except Exception as e:
@@ -759,16 +762,17 @@ def best_value_for_money() -> Apartment:
 			"FROM Reserves "
 			"GROUP BY apartment_id;"
 
-			"SELECT r.apartment_id, r.avg_rating / c.avg_cost AS review_cost_ratio "
-			"FROM AverageRatingPerApartment r "
-			"JOIN AverageCostPerApartment c ON r.apartment_id = c.apartment_id "
+			"SELECT c.apartment_id, a.address, a.city, a.country, a.size, COALESCE(r.avg_rating, 0) / c.avg_cost AS review_cost_ratio "
+			"FROM AverageCostPerApartment c "
+			"LEFT JOIN AverageRatingPerApartment r ON c.apartment_id = r.apartment_id "
+			"JOIN Apartments a ON c.apartment_id = a.apartment_id "
 			"ORDER BY review_cost_ratio DESC "
 			"LIMIT 1; "
 
 		)
 
 		conn.commit()
-		return result.rows[0][0] if rows_effected else 0
+		return Apartment(result.rows[0][0],result.rows[0][1],result.rows[0][2],result.rows[0][3],result.rows[0][4]) if rows_effected else Apartment.bad_apartment()
 
 	except Exception as e:
 		return ReturnValue.ERROR
@@ -898,67 +902,67 @@ def get_apartment_recommendation(customer_id: int) -> List[Tuple[Apartment, floa
 
 
 
-dropTables()
-createTables()
-
-add_owner(Owner(1, "Iddo"))
-add_apartment(Apartment(1, "Rabin", "Tel Aviv", "Israel", "100"))
-owner_owns_apartment(1, 1)
-add_apartment(Apartment(2, "Rabin", "Haifa", "Israel", "100"))
-owner_owns_apartment(1, 2)
-
-add_customer(Customer(2, "Itay"))
-add_customer(Customer(3, "Shir"))
-customer_made_reservation(2, 1, date(2023, 2, 1), date(2023, 2, 4), 900)
-customer_made_reservation(3, 1, date(2023, 2, 5), date(2023, 2, 6), 900)
-customer_made_reservation(3, 2, date(2023, 2, 7), date(2023, 2, 8), 900)
-
-customer_reviewed_apartment(2, 1, date(2023, 8, 3), 10, "okay")
-customer_reviewed_apartment(3, 1, date(2023, 8, 3), 10, "bad")
-customer_reviewed_apartment(3, 2, date(2023, 8, 3), 10, "bad")
-
-res = get_apartment_recommendation(2)
-
-
-
-
-profit_per_month(2023)
-
-add_owner(Owner(1, "Iddo"))
-add_owner(Owner(2, "Shlomi"))
-add_apartment(Apartment(1, "Rabin", "Tel Aviv", "Israel", "100"))
-add_apartment(Apartment(2, "Levinson", "Tel Aviv", "Israel", "100"))
-add_apartment(Apartment(3, "Levinson", "Tel Aviv", "Canada", "100"))
-owner_owns_apartment(1, 1)
-owner_owns_apartment(1, 2)
-allOwners = get_all_location_owners()
-add_customer(Customer(123, "David"))
-
-add_customer(Customer(222, "Yossi"))
-add_owner(Owner(1, "Iddo"))
-add_owner(Owner(2, "Shlomi"))
-
-owner_owns_apartment(1, 1)
-owner_owns_apartment(2, 2)
-
-apart = best_value_for_money()
-
-customer_made_reservation(123, 1, date(2023, 1, 1), date(2023, 1, 6), 1000)
-
-
-customer_made_reservation(222, 1, date(2023, 2, 1), date(2023, 2, 4), 900)
-customer_made_reservation(123, 2, date(2023, 1, 1), date(2023, 1, 6), 10)
-customer_made_reservation(222, 2, date(2023, 2, 1), date(2023, 2, 4), 90)
-
-# customer_cancelled_reservation(123, 1, date(2023,1, 1))
-customer_reviewed_apartment(123, 1, date(2023, 8, 3), 2, "bad")
-customer_reviewed_apartment(123, 2, date(2023, 9, 3), 9, "fun apart")
-# customer_updated_review(123, 1, date(2023, 1, 4), 10, "very very nice")
-customer_reviewed_apartment(222, 1, date(2023, 11, 3), 3, "not nice")
-customer_reviewed_apartment(222, 2, date(2023, 10, 3), 7, "nice")
-apart = best_value_for_money()
-get_top_customer()
-reservations_per_owner()
-get_apartment_rating(1)
-print(get_owner_rating(2))
-get_all_location_owners
+# dropTables()
+# createTables()
+#
+# add_owner(Owner(1, "Iddo"))
+# add_apartment(Apartment(1, "Rabin", "Tel Aviv", "Israel", "100"))
+# owner_owns_apartment(1, 1)
+# add_apartment(Apartment(2, "Rabin", "Haifa", "Israel", "100"))
+# owner_owns_apartment(1, 2)
+#
+# add_customer(Customer(2, "Itay"))
+# add_customer(Customer(3, "Shir"))
+# customer_made_reservation(2, 1, date(2023, 2, 1), date(2023, 2, 4), 900)
+# customer_made_reservation(3, 1, date(2023, 2, 5), date(2023, 2, 6), 900)
+# customer_made_reservation(3, 2, date(2023, 2, 7), date(2023, 2, 8), 900)
+#
+# customer_reviewed_apartment(2, 1, date(2023, 8, 3), 10, "okay")
+# customer_reviewed_apartment(3, 1, date(2023, 8, 3), 10, "bad")
+# customer_reviewed_apartment(3, 2, date(2023, 8, 3), 10, "bad")
+#
+# res = get_apartment_recommendation(2)
+#
+#
+#
+#
+# profit_per_month(2023)
+#
+# add_owner(Owner(1, "Iddo"))
+# add_owner(Owner(2, "Shlomi"))
+# add_apartment(Apartment(1, "Rabin", "Tel Aviv", "Israel", "100"))
+# add_apartment(Apartment(2, "Levinson", "Tel Aviv", "Israel", "100"))
+# add_apartment(Apartment(3, "Levinson", "Tel Aviv", "Canada", "100"))
+# owner_owns_apartment(1, 1)
+# owner_owns_apartment(1, 2)
+# allOwners = get_all_location_owners()
+# add_customer(Customer(123, "David"))
+#
+# add_customer(Customer(222, "Yossi"))
+# add_owner(Owner(1, "Iddo"))
+# add_owner(Owner(2, "Shlomi"))
+#
+# owner_owns_apartment(1, 1)
+# owner_owns_apartment(2, 2)
+#
+# apart = best_value_for_money()
+#
+# customer_made_reservation(123, 1, date(2023, 1, 1), date(2023, 1, 6), 1000)
+#
+#
+# customer_made_reservation(222, 1, date(2023, 2, 1), date(2023, 2, 4), 900)
+# customer_made_reservation(123, 2, date(2023, 1, 1), date(2023, 1, 6), 10)
+# customer_made_reservation(222, 2, date(2023, 2, 1), date(2023, 2, 4), 90)
+#
+# # customer_cancelled_reservation(123, 1, date(2023,1, 1))
+# customer_reviewed_apartment(123, 1, date(2023, 8, 3), 2, "bad")
+# customer_reviewed_apartment(123, 2, date(2023, 9, 3), 9, "fun apart")
+# # customer_updated_review(123, 1, date(2023, 1, 4), 10, "very very nice")
+# customer_reviewed_apartment(222, 1, date(2023, 11, 3), 3, "not nice")
+# customer_reviewed_apartment(222, 2, date(2023, 10, 3), 7, "nice")
+# apart = best_value_for_money()
+# get_top_customer()
+# reservations_per_owner()
+# get_apartment_rating(1)
+# print(get_owner_rating(2))
+# get_all_location_owners
