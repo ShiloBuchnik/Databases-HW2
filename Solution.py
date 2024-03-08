@@ -43,9 +43,6 @@ def create_tables():
 					 "FOREIGN KEY (apartment_id) REFERENCES Apartments(apartment_id) ON DELETE CASCADE);"
 
 
-					 # "FOREIGN KEY (owner_id) REFERENCES Owners(owner_id)"
-					 # "ON DELETE CASCADE)"
-
 					 "CREATE TABLE Reviews( "
 					 "cust_id INTEGER NOT NULL CHECK(cust_id > 0),"
 					 "apartment_id INTEGER NOT NULL CHECK(apartment_id > 0),"
@@ -256,8 +253,6 @@ def delete_apartment(apartment_id: int) -> ReturnValue:
 	except Exception as e:
 		return ReturnValue.ERROR
 
-
-
 	finally:
 		conn.close()
 
@@ -327,7 +322,6 @@ def delete_customer(customer_id: int) -> ReturnValue:
 	except Exception as e:
 		return ReturnValue.ERROR
 
-
 	finally:
 		conn.close()
 
@@ -361,10 +355,6 @@ def customer_made_reservation(customer_id: int, apartment_id: int, start_date: d
 		return ReturnValue.BAD_PARAMS
 	except DatabaseException.CHECK_VIOLATION as e:
 		return ReturnValue.BAD_PARAMS
-	# except DatabaseException.UNIQUE_VIOLATION as e: TODO: for Shilo, think if this table should have keys.
-	#	return ReturnValue.ALREADY_EXISTS
-	# except DatabaseException.FOREIGN_KEY_VIOLATION as e:
-	#	return ReturnValue.ALREADY_EXISTS
 	except DatabaseException.FOREIGN_KEY_VIOLATION as e:
 		return ReturnValue.NOT_EXISTS
 	except DatabaseException.ConnectionInvalid as e:
@@ -414,7 +404,6 @@ def customer_cancelled_reservation(customer_id: int, apartment_id: int, start_da
 
 	return ReturnValue.OK
 
-# TODO: handle the return values: BAD_PARAMS and NOT EXISTS
 def customer_reviewed_apartment(customer_id: int, apartment_id: int, review_date: date, rating: int,
 								review_text: str) -> ReturnValue:
 	# Insert is conditional, so if condition isn't met, we might ignore BAD_PARAMS (because we didn't insert them, so we wouldn't get an exception)
@@ -528,42 +517,6 @@ def owner_owns_apartment(owner_id: int, apartment_id: int) -> ReturnValue:
 		return ReturnValue.BAD_PARAMS
 
 	return ReturnValue.OK
-
-
-# def owner_owns_apartment(owner_id: int, apartment_id: int) -> ReturnValue:
-# 	conn = None
-# 	try:
-# 		conn = Connector.DBConnector()
-#
-# 		query_str = sql.SQL("INSERT INTO Owns(apartment_id,owner_id) "
-# 							"SELECT {apartment_id},{owner_id} "
-# 							"WHERE EXISTS (SELECT 1 FROM owners WHERE owner_id = {owner_id});").format(
-# 			apartment_id=sql.Literal(apartment_id),
-# 			owner_id=sql.Literal(owner_id))
-#
-# 		rows_effected, result = conn.execute(query_str)
-# 		conn.commit()
-# 	except DatabaseException.NOT_NULL_VIOLATION as e:
-# 		return ReturnValue.BAD_PARAMS
-# 	except DatabaseException.CHECK_VIOLATION as e:
-# 		return ReturnValue.BAD_PARAMS
-# 	except DatabaseException.UNIQUE_VIOLATION as e:
-# 		return ReturnValue.ALREADY_EXISTS
-# 	except DatabaseException.FOREIGN_KEY_VIOLATION as e:
-# 		return ReturnValue.NOT_EXISTS
-# 	except DatabaseException.ConnectionInvalid as e:
-# 		return ReturnValue.ERROR
-# 	except Exception as e:
-# 		return ReturnValue.ERROR
-# 	finally:
-# 		conn.close()
-#
-# 	if rows_effected == 0:
-# 		if owner_id > 0:
-# 			return ReturnValue.NOT_EXISTS
-# 		return ReturnValue.BAD_PARAMS
-#
-# 	return ReturnValue.OK
 
 def owner_drops_apartment(owner_id: int, apartment_id: int) -> ReturnValue:
 	conn = None
@@ -879,6 +832,7 @@ def get_apartment_recommendation(customer_id: int) -> List[Tuple[Apartment, floa
 		_, result = conn.execute("DROP VIEW IF EXISTS ReducedReviews CASCADE; "
 								 "DROP VIEW IF EXISTS JoinedWithRatios CASCADE; "
 								 "DROP VIEW IF EXISTS averageRatioPerCustomer CASCADE; "
+								 "DROP VIEW IF EXISTS approximationPerApartment CASCADE; "
 
 								 # Reducing 'Reviews' to include only tuples with apartments that 'customer_id' has reviewed
 								 "CREATE VIEW ReducedReviews AS "
@@ -889,7 +843,7 @@ def get_apartment_recommendation(customer_id: int) -> List[Tuple[Apartment, floa
 
 								 # Joining 'ReducedReviews' with itself, and getting all the ratios for each customer
 								 "CREATE VIEW JoinedWithRatios AS "
-								 "SELECT r1.cust_id AS r1_cust_id, r1.apartment_id, r2.cust_id AS r2_cust_id, (r1.rating / r2.rating) AS ratio "
+								 "SELECT r1.cust_id AS r1_cust_id, r1.apartment_id, r2.cust_id AS r2_cust_id, (r1.rating * 1.0 / r2.rating * 1.0) AS ratio " # Multiplying by 1.0 for double promotion
 								 "FROM ReducedReviews r1, ReducedReviews r2 "
 								 "WHERE r1.apartment_id = r2.apartment_id AND r1.cust_id = {customer_id}; "
 
@@ -905,14 +859,19 @@ def get_apartment_recommendation(customer_id: int) -> List[Tuple[Apartment, floa
 								 # and take only tuples that DON'T include apartments that 'customer_id' reviewed
 								 # Then, we group by 'apartment_id' (becuase multiple approximations can occur),
 								 # and calculate the approximation for each apartment
-								 "SELECT apartment_id, AVG(average_ratio * rating) "
+								 "CREATE VIEW approximationPerApartment AS "
+								 "SELECT apartment_id, AVG(LEAST(GREATEST(average_ratio * rating,1),10)) as approximation " # Keeping each approx in legal rating range
 								 "FROM Reviews r, averageRatioPerCustomer ARPC "
 								 "WHERE r.cust_id = ARPC.cust_id AND r.apartment_id NOT IN ("
 								 "SELECT apartment_id FROM Reviews WHERE cust_id = {customer_id}) "
-								 "GROUP BY r.apartment_id ".format(customer_id=customer_id))
+								 "GROUP BY r.apartment_id; "
+
+								 # This is just a formality - we need an apartment object, not just the apartment id, so we join with 'Apartments'
+								 "SELECT a.apartment_id AS id, a.address AS address, a.city AS city, a.country AS country, a.size AS size, APA.approximation AS approximation "
+								 "FROM Apartments a JOIN approximationPerApartment APA ON a.apartment_id = APA.apartment_id ".format(customer_id=customer_id))
 
 		conn.commit()
-		return result.rows
+		return [ (Apartment(row['id'], row['address'], row['city'], row['country'], row['size']), float(row['approximation'])) for row in result ]
 
 	except Exception as e:
 		return ReturnValue.ERROR
@@ -920,67 +879,4 @@ def get_apartment_recommendation(customer_id: int) -> List[Tuple[Apartment, floa
 	finally:
 		conn.close()
 
-
 drop_tables()
-#
-# add_owner(Owner(1, "Iddo"))
-# add_apartment(Apartment(1, "Rabin", "Tel Aviv", "Israel", "100"))
-# owner_owns_apartment(1, 1)
-# add_apartment(Apartment(2, "Rabin", "Haifa", "Israel", "100"))
-# owner_owns_apartment(1, 2)
-#
-# add_customer(Customer(2, "Itay"))
-# add_customer(Customer(3, "Shir"))
-# customer_made_reservation(2, 1, date(2023, 2, 1), date(2023, 2, 4), 900)
-# customer_made_reservation(3, 1, date(2023, 2, 5), date(2023, 2, 6), 900)
-# customer_made_reservation(3, 2, date(2023, 2, 7), date(2023, 2, 8), 900)
-#
-# customer_reviewed_apartment(2, 1, date(2023, 8, 3), 10, "okay")
-# customer_reviewed_apartment(3, 1, date(2023, 8, 3), 10, "bad")
-# customer_reviewed_apartment(3, 2, date(2023, 8, 3), 10, "bad")
-#
-# res = get_apartment_recommendation(2)
-#
-#
-#
-#
-# profit_per_month(2023)
-#
-# add_owner(Owner(1, "Iddo"))
-# add_owner(Owner(2, "Shlomi"))
-# add_apartment(Apartment(1, "Rabin", "Tel Aviv", "Israel", "100"))
-# add_apartment(Apartment(2, "Levinson", "Tel Aviv", "Israel", "100"))
-# add_apartment(Apartment(3, "Levinson", "Tel Aviv", "Canada", "100"))
-# owner_owns_apartment(1, 1)
-# owner_owns_apartment(1, 2)
-# allOwners = get_all_location_owners()
-# add_customer(Customer(123, "David"))
-#
-# add_customer(Customer(222, "Yossi"))
-# add_owner(Owner(1, "Iddo"))
-# add_owner(Owner(2, "Shlomi"))
-#
-# owner_owns_apartment(1, 1)
-# owner_owns_apartment(2, 2)
-#
-# apart = best_value_for_money()
-#
-# customer_made_reservation(123, 1, date(2023, 1, 1), date(2023, 1, 6), 1000)
-#
-#
-# customer_made_reservation(222, 1, date(2023, 2, 1), date(2023, 2, 4), 900)
-# customer_made_reservation(123, 2, date(2023, 1, 1), date(2023, 1, 6), 10)
-# customer_made_reservation(222, 2, date(2023, 2, 1), date(2023, 2, 4), 90)
-#
-# # customer_cancelled_reservation(123, 1, date(2023,1, 1))
-# customer_reviewed_apartment(123, 1, date(2023, 8, 3), 2, "bad")
-# customer_reviewed_apartment(123, 2, date(2023, 9, 3), 9, "fun apart")
-# # customer_updated_review(123, 1, date(2023, 1, 4), 10, "very very nice")
-# customer_reviewed_apartment(222, 1, date(2023, 11, 3), 3, "not nice")
-# customer_reviewed_apartment(222, 2, date(2023, 10, 3), 7, "nice")
-# apart = best_value_for_money()
-# get_top_customer()
-# reservations_per_owner()
-# res = get_apartment_rating(1)
-# print(get_owner_rating(2))
-# get_all_location_owners
