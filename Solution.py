@@ -17,7 +17,7 @@ def create_tables():
 	conn = None
 	try:
 		conn = Connector.DBConnector()
-		conn.execute("Begin; "
+		conn.execute(
 
 					 "CREATE TABLE Owners("
 					 "owner_id INTEGER PRIMARY KEY NOT NULL CHECK(owner_id > 0),"
@@ -67,7 +67,12 @@ def create_tables():
 					 "FOREIGN KEY (cust_id) REFERENCES Customers(cust_id) ON DELETE CASCADE,"
 					 "FOREIGN KEY (apartment_id) REFERENCES Apartments(apartment_id) ON DELETE CASCADE);"
 
-					 "COMMIT;")
+					# Creating this view "globally", since we need it for 'get_apartment_rating' and 'get_owner_rating' as well
+					# It returns a table with all apartments and their average rating. If an apartment doesn't have ratings - its average rating is 0.
+					"CREATE VIEW AllApartmentsRating AS "
+					"SELECT a.apartment_id as id, COALESCE(AVG(r.rating), 0) AS rating "
+					"FROM Apartments a LEFT JOIN Reviews r ON a.apartment_id = r.apartment_id "
+					"GROUP BY a.apartment_id; ")
 
 		conn.commit()
 
@@ -96,15 +101,15 @@ def drop_tables():
 	conn = None
 	try:
 		conn = Connector.DBConnector()
-		conn.execute("BEGIN;"
+		conn.execute(
+					 "DROP VIEW IF EXISTS AllApartmentsRating CASCADE; "
+
 					 "DROP TABLE IF EXISTS Owners CASCADE;"
 					 "DROP TABLE IF EXISTS Apartments CASCADE;"
 					 "DROP TABLE IF EXISTS Customers CASCADE;"
 					 "DROP TABLE IF EXISTS Owns CASCADE;"
 					 "DROP TABLE IF EXISTS Reviews CASCADE;"
-					 "DROP TABLE IF EXISTS Reserves CASCADE;"
-
-					 "COMMIT")
+					 "DROP TABLE IF EXISTS Reserves CASCADE;")
 		conn.commit()
 
 	except Exception as e:
@@ -376,6 +381,11 @@ def customer_made_reservation(customer_id: int, apartment_id: int, start_date: d
 
 
 def customer_cancelled_reservation(customer_id: int, apartment_id: int, start_date: date) -> ReturnValue:
+	# If SQL will search the table for a tuple with these bad parameters, it will find nothing and return 'NOT EXISTS'
+	# And while it is true that it doesn't exist, we want to inform that those are bad parameters, so we perform this check
+	if customer_id <= 0 or apartment_id <= 0:
+		return ReturnValue.BAD_PARAMS
+
 	conn = None
 	try:
 		conn = Connector.DBConnector()
@@ -407,6 +417,11 @@ def customer_cancelled_reservation(customer_id: int, apartment_id: int, start_da
 # TODO: handle the return values: BAD_PARAMS and NOT EXISTS
 def customer_reviewed_apartment(customer_id: int, apartment_id: int, review_date: date, rating: int,
 								review_text: str) -> ReturnValue:
+	# Insert is conditional, so if condition isn't met, we might ignore BAD_PARAMS (because we didn't insert them, so we wouldn't get an exception)
+	# For that, we check beforehand
+	if customer_id <= 0 or apartment_id <= 0 or rating not in range(1, 11):
+		return ReturnValue.BAD_PARAMS
+
 	conn = None
 	try:
 		conn = Connector.DBConnector()
@@ -438,18 +453,24 @@ def customer_reviewed_apartment(customer_id: int, apartment_id: int, review_date
 	finally:
 		conn.close()
 
-
-	return ReturnValue.OK
+	if rows_effected:
+		return ReturnValue.OK
+	else:
+		return ReturnValue.NOT_EXISTS
 
 
 def customer_updated_review(customer_id: int, apartment_id: int, update_date: date, new_rating: int,
 							new_text: str) -> ReturnValue:
+	# Same deal as with 'customer_reviewed_apartment()'
+	if customer_id <= 0 or apartment_id <= 0 or new_rating <= 0 or new_rating > 10:
+		return ReturnValue.BAD_PARAMS
+
 	conn = None
 	try:
 		conn = Connector.DBConnector()
 		rows_effected, _ = conn.execute("UPDATE Reviews "
-										"SET rating={new_rating}, review_text='{new_text}' "
-										"WHERE cust_id={customer_id} AND apartment_id={apartment_id} AND review_date < '{update_date}'"
+										"SET review_date = '{update_date}', rating={new_rating}, review_text='{new_text}' "
+										"WHERE cust_id={customer_id} AND apartment_id={apartment_id} AND review_date <= '{update_date}'"
 										.format(new_rating=new_rating, new_text=new_text, customer_id=customer_id,
 												apartment_id=apartment_id,
 												update_date=update_date.strftime('%Y-%m-%d')))
@@ -627,21 +648,12 @@ def get_apartment_rating(apartment_id: int) -> float:
 		conn = Connector.DBConnector()
 
 		# In each function call, we drop the view from last function call (if exists), and create a new one to use
-		rows_affected, result = conn.execute("BEGIN;"
-								 "DROP VIEW IF EXISTS ApartmentRating CASCADE; "
-
-								 "CREATE VIEW ApartmentRating AS "  # Returns column of ratings of 'apartment_id' 
-								 "SELECT COALESCE(rating, 0) as rating "
-								 "FROM Reviews "
-								 "WHERE apartment_id = {apartment_id}; "
-
-								 "SELECT AVG(rating) AS average_rating "
-								 "FROM ApartmentRating "
-
-								 "COMMIT;".format(apartment_id=apartment_id))
+		rows_affected, result = conn.execute("SELECT rating "
+								 "FROM AllApartmentsRating "
+								 "WHERE id = {apartment_id} ".format(apartment_id=apartment_id))
 
 		conn.commit()
-		return result[0]['average_rating'] if result[0]['average_rating'] is not None else 0
+		return result[0]['rating']
 
 	except Exception as e:
 		return ReturnValue.ERROR
@@ -649,40 +661,18 @@ def get_apartment_rating(apartment_id: int) -> float:
 	finally:
 		conn.close()
 
-#TODO: this function must used same VIEW as get_apartment_rating
-#TODO: must handle case that owner owns apartment that doesnt have rating as 0.
 def get_owner_rating(owner_id: int) -> float:
 	conn = None
 	try:
 		conn = Connector.DBConnector()
 
-		_, result = conn.execute("BEGIN;"
-								 "DROP VIEW IF EXISTS ApartmentsAverages CASCADE; "
-								 "DROP VIEW IF EXISTS ReducedOwns CASCADE; "
-
-								 "CREATE VIEW ReducedOwns AS "  # Reducing 'Owns' to contain only apartments owned by 'owner_id'
-								 "SELECT * "
-								 "FROM OWNS "
-								 "WHERE owner_id = {owner_id}; "
-
-								 # Joining 'Reviews' with 'ReducedOwns', so we get ratings only for apartments owned by 'owner_id'
-								 # Then we calculate average rating for each apartment by grouping them by 'apartment_id'
-								 # The output is a table with two columns - 'apartment_id' and its average rating
-								 "CREATE VIEW ApartmentsAverages AS "
-								 "SELECT r.apartment_id, AVG(rating) AS average_rating "
-								 "FROM Reviews r, ReducedOwns ro "
-								 "WHERE r.apartment_id = ro.apartment_id "
-								 "GROUP BY r.apartment_id; "
-
-								 "SELECT AVG(average_rating) AS average_rating " # Calculating average of averages
-								 "FROM ApartmentsAverages "
-
-								 "COMMIT;".format(owner_id=owner_id))
+		_, result = conn.execute(
+								 "SELECT COALESCE(AVG(rating), 0) AS average_rating "
+								 "FROM AllApartmentsRating AAR JOIN Owns o ON AAR.id = o.apartment_id "
+								 "WHERE o.owner_id = {owner_id}; ".format(owner_id=owner_id))
 
 		conn.commit()
-		# If 'result' is empty, that means there isn't an owner with 'owner_id';
-		# or the owner doesn't own any apartments; or their apartment(s) didn't get reviews.
-		return result[0]['average_rating'] if result[0]['average_rating'] else 0.0
+		return result[0]['average_rating']
 
 	except Exception as e:
 		return ReturnValue.ERROR
@@ -822,17 +812,6 @@ def best_value_for_money() -> Apartment:
 		conn.close()
 
 
-# "CREATE VIEW NumbersView AS "
-# "WITH RECURSIVE NumberSeries AS ( "
-# "SELECT 1 AS monthNumber "
-# "UNION ALL "
-# "SELECT monthNumber + 1 "
-# "FROM NumberSeries "
-# "WHERE monthNumber < 12 "
-# ") "
-# "SELECT monthNumber FROM NumberSeries; "
-
-
 # Note to self: in a transaction (bunch of statements) PostgreSQL returns the return value of the last statement
 # So if the last statement is 'COMMIT', it will return its return value, which is an *empty table*.
 # Also, we don't even need to write 'COMMIT' anyway, it is done automatically by the 'DBConnector' class
@@ -943,9 +922,6 @@ def get_apartment_recommendation(customer_id: int) -> List[Tuple[Apartment, floa
 
 
 drop_tables()
-
-# dropTables()
-# createTables()
 #
 # add_owner(Owner(1, "Iddo"))
 # add_apartment(Apartment(1, "Rabin", "Tel Aviv", "Israel", "100"))
@@ -1005,6 +981,6 @@ drop_tables()
 # apart = best_value_for_money()
 # get_top_customer()
 # reservations_per_owner()
-# get_apartment_rating(1)
+# res = get_apartment_rating(1)
 # print(get_owner_rating(2))
 # get_all_location_owners
