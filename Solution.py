@@ -1,5 +1,6 @@
 from psycopg2 import sql
 from datetime import date, datetime
+from typing import List, Tuple
 
 import Utility.DBConnector as Connector
 from Utility.ReturnValue import ReturnValue
@@ -27,11 +28,8 @@ def create_tables():
 					 "address TEXT NOT NULL,"
 					 "city TEXT NOT NULL,"
 					 "country TEXT NOT NULL,"
-					 "size INTEGER NOT NULL CHECK(size > 0)"
-					 # "owner_id INTEGER CHECK(owner_id > 0),"
-					 # "CONSTRAINT fk_owner "
-					 # "FOREIGN KEY (owner_id) REFERENCES Owners(owner_id)"
-					 # "ON DELETE SET NULL)"
+					 "size INTEGER NOT NULL CHECK(size > 0), "
+					 "UNIQUE (Address, City, Country)"
 					 ");"
 
 					 "CREATE TABLE Customers( "
@@ -210,6 +208,7 @@ def add_apartment(apartment: Apartment) -> ReturnValue:
 		return ReturnValue.BAD_PARAMS
 	except DatabaseException.UNIQUE_VIOLATION as e:
 		return ReturnValue.ALREADY_EXISTS
+
 	except DatabaseException.FOREIGN_KEY_VIOLATION as e:
 		return ReturnValue.ALREADY_EXISTS
 	except DatabaseException.ConnectionInvalid as e:
@@ -405,7 +404,7 @@ def customer_cancelled_reservation(customer_id: int, apartment_id: int, start_da
 
 	return ReturnValue.OK
 
-
+# TODO: handle the return values: BAD_PARAMS and NOT EXISTS
 def customer_reviewed_apartment(customer_id: int, apartment_id: int, review_date: date, rating: int,
 								review_text: str) -> ReturnValue:
 	conn = None
@@ -415,7 +414,7 @@ def customer_reviewed_apartment(customer_id: int, apartment_id: int, review_date
 		# Same shtick as with 'customer_made_reservation()'
 		# 'WHERE EXISTS' is true when there's a reservation that ended before 'review_date', and in that case, 'select' will just create a row on the fly
 		# 'WHERE EXISTS' is false otherwise, and in that case the entire subquery will return an empty relation
-		conn.execute("INSERT INTO Reviews "
+		rows_effected, _ = conn.execute("INSERT INTO Reviews "
 					 "SELECT {customer_id},{apartment_id},'{review_date}',{rating},'{review_text}' "
 					 "WHERE EXISTS("
 					 "SELECT 1 FROM Reserves r WHERE r.cust_id = {customer_id} AND r.apartment_id = {apartment_id} AND r.end_date <= '{review_date}')"
@@ -438,6 +437,7 @@ def customer_reviewed_apartment(customer_id: int, apartment_id: int, review_date
 
 	finally:
 		conn.close()
+
 
 	return ReturnValue.OK
 
@@ -502,10 +502,47 @@ def owner_owns_apartment(owner_id: int, apartment_id: int) -> ReturnValue:
 		conn.close()
 
 	if rows_effected == 0:
-		return ReturnValue.NOT_EXISTS
+		if owner_id > 0:
+			return ReturnValue.NOT_EXISTS
+		return ReturnValue.BAD_PARAMS
 
 	return ReturnValue.OK
 
+
+# def owner_owns_apartment(owner_id: int, apartment_id: int) -> ReturnValue:
+# 	conn = None
+# 	try:
+# 		conn = Connector.DBConnector()
+#
+# 		query_str = sql.SQL("INSERT INTO Owns(apartment_id,owner_id) "
+# 							"SELECT {apartment_id},{owner_id} "
+# 							"WHERE EXISTS (SELECT 1 FROM owners WHERE owner_id = {owner_id});").format(
+# 			apartment_id=sql.Literal(apartment_id),
+# 			owner_id=sql.Literal(owner_id))
+#
+# 		rows_effected, result = conn.execute(query_str)
+# 		conn.commit()
+# 	except DatabaseException.NOT_NULL_VIOLATION as e:
+# 		return ReturnValue.BAD_PARAMS
+# 	except DatabaseException.CHECK_VIOLATION as e:
+# 		return ReturnValue.BAD_PARAMS
+# 	except DatabaseException.UNIQUE_VIOLATION as e:
+# 		return ReturnValue.ALREADY_EXISTS
+# 	except DatabaseException.FOREIGN_KEY_VIOLATION as e:
+# 		return ReturnValue.NOT_EXISTS
+# 	except DatabaseException.ConnectionInvalid as e:
+# 		return ReturnValue.ERROR
+# 	except Exception as e:
+# 		return ReturnValue.ERROR
+# 	finally:
+# 		conn.close()
+#
+# 	if rows_effected == 0:
+# 		if owner_id > 0:
+# 			return ReturnValue.NOT_EXISTS
+# 		return ReturnValue.BAD_PARAMS
+#
+# 	return ReturnValue.OK
 
 def owner_drops_apartment(owner_id: int, apartment_id: int) -> ReturnValue:
 	conn = None
@@ -530,7 +567,9 @@ def owner_drops_apartment(owner_id: int, apartment_id: int) -> ReturnValue:
 		conn.close()
 
 	if rows_effected == 0:
-		return ReturnValue.NOT_EXISTS
+		if owner_id > 0 and apartment_id > 0:
+			return ReturnValue.NOT_EXISTS
+		return ReturnValue.BAD_PARAMS
 
 	return ReturnValue.OK
 
@@ -610,14 +649,16 @@ def get_apartment_rating(apartment_id: int) -> float:
 	finally:
 		conn.close()
 
-
+#TODO: this function must used same VIEW as get_apartment_rating
+#TODO: must handle case that owner owns apartment that doesnt have rating as 0.
 def get_owner_rating(owner_id: int) -> float:
 	conn = None
 	try:
 		conn = Connector.DBConnector()
 
 		_, result = conn.execute("BEGIN;"
-								 "DROP VIEW IF EXISTS ApartmentRating CASCADE; "
+								 "DROP VIEW IF EXISTS ApartmentsAverages CASCADE; "
+								 "DROP VIEW IF EXISTS ReducedOwns CASCADE; "
 
 								 "CREATE VIEW ReducedOwns AS "  # Reducing 'Owns' to contain only apartments owned by 'owner_id'
 								 "SELECT * "
@@ -901,6 +942,7 @@ def get_apartment_recommendation(customer_id: int) -> List[Tuple[Apartment, floa
 		conn.close()
 
 
+drop_tables()
 
 # dropTables()
 # createTables()
