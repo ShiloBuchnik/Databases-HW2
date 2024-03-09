@@ -879,4 +879,3 @@ def get_apartment_recommendation(customer_id: int) -> List[Tuple[Apartment, floa
 	finally:
 		conn.close()
 
-drop_tables()
