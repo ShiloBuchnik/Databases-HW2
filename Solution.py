@@ -668,7 +668,6 @@ def reservations_per_owner() -> List[Tuple[str, int]]:
 	try:
 		conn = Connector.DBConnector()
 		# We want num_of_reservations for *all* owners, not just ones with actual reservations.
-		# Because of that, we first use right outer join, and only then we group by 'owner_id'
 		_, result = conn.execute("SELECT o.owner_name, COALESCE(COUNT(r.apartment_id), 0) AS numberOfReservations "
 								 "FROM Owners o "
 								 "LEFT JOIN Owns ow ON o.owner_id = ow.owner_id "
@@ -844,8 +843,8 @@ def get_apartment_recommendation(customer_id: int) -> List[Tuple[Apartment, floa
 								 # Joining 'ReducedReviews' with itself, and getting all the ratios for each customer
 								 "CREATE VIEW JoinedWithRatios AS "
 								 "SELECT r1.cust_id AS r1_cust_id, r1.apartment_id, r2.cust_id AS r2_cust_id, (r1.rating * 1.0 / r2.rating * 1.0) AS ratio " # Multiplying by 1.0 for double promotion
-								 "FROM ReducedReviews r1, ReducedReviews r2 "
-								 "WHERE r1.apartment_id = r2.apartment_id AND r1.cust_id = {customer_id}; "
+								 "FROM ReducedReviews r1 JOIN ReducedReviews r2 ON r1.apartment_id = r2.apartment_id "
+								 "WHERE r1.cust_id = {customer_id}; "
 
 								 # Taking average of all said ratios for each customer
 								 # Now we have a table of 2 columns: cust_id and its average ratio
@@ -861,8 +860,8 @@ def get_apartment_recommendation(customer_id: int) -> List[Tuple[Apartment, floa
 								 # and calculate the approximation for each apartment
 								 "CREATE VIEW approximationPerApartment AS "
 								 "SELECT apartment_id, AVG(LEAST(GREATEST(average_ratio * rating,1),10)) as approximation " # Keeping each approx in legal rating range
-								 "FROM Reviews r, averageRatioPerCustomer ARPC "
-								 "WHERE r.cust_id = ARPC.cust_id AND r.apartment_id NOT IN ("
+								 "FROM Reviews r JOIN averageRatioPerCustomer ARPC ON r.cust_id = ARPC.cust_id "
+								 "WHERE r.apartment_id NOT IN ("
 								 "SELECT apartment_id FROM Reviews WHERE cust_id = {customer_id}) "
 								 "GROUP BY r.apartment_id; "
 
@@ -878,4 +877,3 @@ def get_apartment_recommendation(customer_id: int) -> List[Tuple[Apartment, floa
 
 	finally:
 		conn.close()
-
